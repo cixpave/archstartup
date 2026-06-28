@@ -1,181 +1,320 @@
 /*
- * catalog.js
- * Data model for the CachyOS setup wizard.
+ * generator.js
+ * Turns the wizard's selections into a runnable setup.sh.
  *
- * Every choice the user can make lives here as plain data. The wizard renders
- * these steps, and the generator (generator.js) turns the user's selections
- * into a runnable setup.sh. Keeping this declarative means adding a new app or
- * tweak is a one-line data change, not a UI rewrite.
- *
- * Item types tell the generator HOW to install something:
- *   repo    -> sudo pacman -S --needed   (official repos)
- *   aur     -> <aur helper> -S --needed  (Arch User Repository)
- *   flatpak -> flatpak install flathub   (sandboxed fallback)
- *   special -> custom shell block (drivers, tweaks, etc.)
+ * The browser can't install packages on your machine (and shouldn't be able
+ * to). So instead the wizard produces a clean, readable bash script tailored
+ * to exactly what you ticked. You read it, then run it. Same philosophy as the
+ * original interactive script — nothing silent — just front-loaded into a UI.
  */
 
-const CATALOG = {
-  // ---- Step order is the order of this array -------------------------------
-  steps: [
-    {
-      id: "welcome",
-      title: "Welcome to CachyOS",
-      subtitle: "Let's get your fresh Arch-based system set up — the friendly way.",
-      kind: "intro",
-    },
+const Generator = (() => {
+  // Collect every selected option object across all multi/single steps.
+  function selectedOptions(state) {
+    const picks = [];
+    for (const step of CATALOG.steps) {
+      if (!step.options) continue;
+      const sel = state[step.key];
+      if (!sel) continue;
+      const ids = Array.isArray(sel) ? sel : [sel];
+      for (const opt of step.options) {
+        if (ids.includes(opt.id)) picks.push(opt);
+      }
+    }
+    return picks;
+  }
 
-    {
-      id: "gpu",
-      title: "Graphics drivers",
-      subtitle: "Pick the GPU in this machine. This is the one step worth getting right first.",
-      kind: "single", // radio: choose exactly one
-      key: "gpu",
-      help:
-        "On CachyOS the safest route for NVIDIA is the built-in <code>chwd</code> detector, " +
-        "which matches the right driver to your card and kernel.",
-      reference: { label: "CachyOS GPU wiki", url: "https://wiki.cachyos.org/configuration/gpu/" },
-      options: [
-        {
-          id: "gpu-nvidia",
-          name: "NVIDIA (RTX/GTX)",
-          desc: "Uses chwd to auto-pick nvidia-open-dkms / nvidia-dkms + Vulkan + video decode.",
-          recommended: true,
-          special: "nvidia",
-        },
-        {
-          id: "gpu-amd",
-          name: "AMD (Radeon)",
-          desc: "Mesa RADV Vulkan stack + 32-bit libs. Open-source, nothing to reboot for.",
-          special: "amd",
-        },
-        {
-          id: "gpu-intel-only",
-          name: "Intel graphics only",
-          desc: "No discrete GPU — just the Intel iGPU Vulkan + media drivers.",
-          special: "intel-gpu",
-        },
-        {
-          id: "gpu-skip",
-          name: "Skip / already set up",
-          desc: "Leave graphics drivers untouched.",
-          special: "none",
-        },
-      ],
-    },
+  function buildScript(state) {
+    const picks = selectedOptions(state);
 
-    {
-      id: "cpu",
-      title: "CPU microcode",
-      subtitle: "Microcode delivers stability and security fixes for your processor.",
-      kind: "single",
-      key: "cpu",
-      reference: { label: "Arch Wiki: Microcode", url: "https://wiki.archlinux.org/title/Microcode" },
-      options: [
-        { id: "cpu-intel", name: "Intel", desc: "intel-ucode + iGPU media decode drivers.", recommended: true, special: "intel-cpu" },
-        { id: "cpu-amd", name: "AMD", desc: "amd-ucode (Ryzen / EPYC).", special: "amd-cpu" },
-        { id: "cpu-skip", name: "Skip", desc: "Don't touch microcode.", special: "none" },
-      ],
-    },
+    const repoPkgs = [];
+    const aurPkgs = [];
+    const specials = new Set();
+    let needsMultilib = false;
 
-    {
-      id: "gaming",
-      title: "Gaming stack",
-      subtitle: "The core toolkit for native and Proton gaming. Pick what you want.",
-      kind: "multi", // checkboxes: choose any
-      key: "gaming",
-      help:
-        "Launch a game in Steam with <code>gamemoderun mangohud %command%</code> to get the " +
-        "performance governor plus an FPS/usage overlay.",
-      reference: { label: "ProtonDB — check any game first", url: "https://www.protondb.com" },
-      options: [
-        { id: "steam", name: "Steam", desc: "Valve's client. Pulls in 32-bit libs via multilib.", type: "repo", packages: ["steam"], recommended: true, needsMultilib: true },
-        { id: "gamemode", name: "GameMode", desc: "On-demand CPU/GPU performance governor.", type: "repo", packages: ["gamemode", "lib32-gamemode"], recommended: true, needsMultilib: true },
-        { id: "mangohud", name: "MangoHud", desc: "FPS, frametime, temps & usage overlay.", type: "repo", packages: ["mangohud", "lib32-mangohud"], recommended: true, needsMultilib: true },
-        { id: "gamescope", name: "Gamescope", desc: "Valve's micro-compositor (great for handhelds & scaling).", type: "repo", packages: ["gamescope"] },
-        { id: "protonup", name: "ProtonUp-Qt", desc: "One-click installer for Proton-GE custom builds.", type: "aur", packages: ["protonup-qt"], recommended: true },
-        { id: "lutris", name: "Lutris", desc: "Manager for non-Steam games, emulators & stores.", type: "repo", packages: ["lutris"] },
-        { id: "heroic", name: "Heroic Games Launcher", desc: "Epic Games + GOG + Amazon Prime launcher.", type: "aur", packages: ["heroic-games-launcher-bin"] },
-      ],
-    },
+    for (const opt of picks) {
+      if (opt.needsMultilib) needsMultilib = true;
+      if (opt.type === "repo") repoPkgs.push(...opt.packages);
+      else if (opt.type === "aur") aurPkgs.push(...opt.packages);
+      else if (opt.special) specials.add(opt.special);
+      else if (opt.type === "special" && opt.special) specials.add(opt.special);
+    }
 
-    {
-      id: "apps",
-      title: "Applications",
-      subtitle: "Everyday apps. Tick the ones you use — leave the rest.",
-      kind: "multi",
-      key: "apps",
-      help:
-        "Some apps live in the AUR (community-maintained). If you tick any of those, the " +
-        "generated script installs the <code>paru</code> helper automatically.",
-      options: [
-        { id: "discord", name: "Discord", desc: "Voice/text chat. Official repo build.", type: "repo", packages: ["discord"], recommended: true },
-        { id: "chrome", name: "Google Chrome", desc: "Needed for Xbox Cloud / Game Pass streaming.", type: "aur", packages: ["google-chrome"] },
-        { id: "firefox", name: "Firefox", desc: "Open-source browser, in the official repos.", type: "repo", packages: ["firefox"], recommended: true },
-        { id: "spotify", name: "Spotify", desc: "Music streaming (AUR build).", type: "aur", packages: ["spotify"] },
-        { id: "prism", name: "Prism Launcher", desc: "Best Minecraft launcher — Modrinth packs built in.", type: "repo", packages: ["prismlauncher"], recommended: true },
-        { id: "modrinth", name: "Modrinth App", desc: "Mod & modpack manager.", type: "aur", packages: ["modrinth-app-bin"] },
-        { id: "vscode", name: "VS Code", desc: "Microsoft's editor (OSS build, code).", type: "repo", packages: ["code"] },
-        { id: "obs", name: "OBS Studio", desc: "Recording & streaming.", type: "repo", packages: ["obs-studio"] },
-        { id: "thinkorswim", name: "ThinkOrSwim", desc: "Schwab trading platform — installs a JDK too.", type: "special", special: "thinkorswim" },
-      ],
-    },
+    // multilib is implied by any 32-bit / steam pick, or chosen explicitly.
+    if (specials.has("multilib") || needsMultilib) specials.add("multilib");
+    const needsAur = aurPkgs.length > 0 || specials.has("thinkorswim");
 
-    {
-      id: "flatpak",
-      title: "Flatpak",
-      subtitle: "A sandboxed app source — a handy fallback when an app isn't in the repos.",
-      kind: "multi",
-      key: "flatpak",
-      reference: { label: "Flathub", url: "https://flathub.org" },
-      options: [
-        { id: "flatpak-enable", name: "Enable Flatpak + Flathub", desc: "Adds the flatpak runtime and the Flathub remote.", type: "special", special: "flatpak", recommended: true },
-      ],
-    },
+    const L = []; // lines
+    const p = (s = "") => L.push(s);
 
-    {
-      id: "tweaks",
-      title: "Optimization & tweaks",
-      subtitle: "Safe, reversible system tuning. CachyOS sets some of these already — repeating is harmless.",
-      kind: "multi",
-      key: "tweaks",
-      help:
-        "These write to <code>/etc/sysctl.d/</code> and enable systemd timers — nothing destructive, " +
-        "and every change is listed in the generated script so you can read before you run.",
-      reference: { label: "CachyOS performance wiki", url: "https://wiki.cachyos.org/" },
-      options: [
-        { id: "tweak-sysctl", name: "Gaming sysctl tuning", desc: "Raises vm.max_map_count (needed by some Proton titles) and lowers swappiness.", type: "special", special: "sysctl", recommended: true },
-        { id: "tweak-fstrim", name: "Enable fstrim timer", desc: "Weekly SSD TRIM for sustained performance.", type: "special", special: "fstrim", recommended: true },
-        { id: "tweak-multilib", name: "Enable multilib repo", desc: "32-bit packages (required for Steam & many games).", type: "special", special: "multilib", recommended: true },
-        { id: "tweak-firewall", name: "Enable firewall (ufw)", desc: "Sensible default-deny firewall.", type: "special", special: "ufw" },
-      ],
-    },
+    // ---- Header --------------------------------------------------------------
+    p("#!/usr/bin/env bash");
+    p("#");
+    p("# setup.sh — generated by the CachyOS Setup Wizard");
+    p("# https://github.com/cixpave/archstartup");
+    p("#");
+    p("# Run as your NORMAL user (not root). It calls sudo where needed.");
+    p("# Read it top to bottom before running — nothing here is hidden.");
+    p("#");
+    p("set -u");
+    p("");
+    p('BOLD=$\'\\e[1m\'; GREEN=$\'\\e[32m\'; YELLOW=$\'\\e[33m\'; RED=$\'\\e[31m\'; BLUE=$\'\\e[34m\'; RESET=$\'\\e[0m\'');
+    p('info() { printf "%s\\n" "${BLUE}${BOLD}::${RESET} $*"; }');
+    p('ok()   { printf "%s\\n" "${GREEN}${BOLD}\\xe2\\x9c\\x93${RESET} $*"; }');
+    p('warn() { printf "%s\\n" "${YELLOW}${BOLD}!${RESET} $*"; }');
+    p('err()  { printf "%s\\n" "${RED}${BOLD}\\xe2\\x9c\\x97${RESET} $*" >&2; }');
+    p("");
+    p('if [[ $EUID -eq 0 ]]; then err "Run as your normal user, not root."; exit 1; fi');
+    p('if ! command -v pacman >/dev/null 2>&1; then err "pacman not found — CachyOS/Arch only."; exit 1; fi');
+    p("");
 
-    {
-      id: "summary",
-      title: "Your setup is ready",
-      subtitle: "Review your picks, then copy or download your personalized install script.",
-      kind: "summary",
-    },
-  ],
+    // ---- System update -------------------------------------------------------
+    p("# --- Update the system first (strongly recommended) ---");
+    p('info "Updating the system (pacman -Syu)..."');
+    p('sudo pacman -Syu --noconfirm || warn "Update reported errors — review above."');
+    p("");
 
-  /* Bite-size tips shown in the sidebar, rotated per step. */
-  tips: {
-    welcome: [
-      "This wizard never touches your machine — it builds a script you read and run yourself.",
-      "Everything you pick is reversible. Nothing here reformats or wipes anything.",
-    ],
-    gpu: [
-      "NVIDIA needs a reboot after install before games will run.",
-      "Unsure of your card? Run <code>lspci -k | grep -A2 VGA</code> in a terminal.",
-    ],
-    cpu: ["Microcode loads at boot via your initramfs — CachyOS regenerates it for you."],
-    gaming: [
-      "Check every game on ProtonDB before buying — most 'just work', a few don't.",
-      "Anti-cheat can block Linux. Verify multiplayer titles on areweanticheatyet.com.",
-    ],
-    apps: ["AUR builds compile from source the first time — give Chrome/Spotify a minute."],
-    flatpak: ["Flatpaks are sandboxed, so they sometimes need extra permission grants (use Flatseal)."],
-    tweaks: ["vm.max_map_count fixes crashes in some Source-engine & Proton games."],
-    summary: ["Run the script as your normal user — it calls sudo itself where needed."],
-  },
-};
+    // ---- multilib ------------------------------------------------------------
+    if (specials.has("multilib")) {
+      p("# --- Enable [multilib] (32-bit packages for Steam/games) ---");
+      p('if ! grep -q "^\\[multilib\\]" /etc/pacman.conf; then');
+      p("  info \"Enabling multilib repo...\"");
+      p("  sudo sed -i '/^#\\[multilib\\]/,+1 s/^#//' /etc/pacman.conf");
+      p("  sudo pacman -Sy");
+      p('  ok "multilib enabled."');
+      p("else");
+      p('  ok "multilib already enabled."');
+      p("fi");
+      p("");
+    }
+
+    // ---- AUR helper ----------------------------------------------------------
+    if (needsAur) {
+      p("# --- Ensure an AUR helper (paru) ---");
+      p('if command -v paru >/dev/null 2>&1; then AUR=paru');
+      p("elif command -v yay >/dev/null 2>&1; then AUR=yay");
+      p("else");
+      p('  info "Installing the paru AUR helper..."');
+      p("  sudo pacman -S --needed --noconfirm base-devel git");
+      p('  tmp="$(mktemp -d)"');
+      p('  git clone https://aur.archlinux.org/paru-bin.git "$tmp/paru-bin" \\');
+      p('    && ( cd "$tmp/paru-bin" && makepkg -si --noconfirm )');
+      p('  rm -rf "$tmp"');
+      p("  AUR=paru");
+      p("fi");
+      p('ok "Using AUR helper: $AUR"');
+      p("");
+    }
+
+    // ---- GPU drivers ---------------------------------------------------------
+    if (specials.has("nvidia")) {
+      p("# --- NVIDIA drivers ---");
+      p('info "Setting up NVIDIA drivers..."');
+      p("if command -v chwd >/dev/null 2>&1; then");
+      p('  sudo chwd -a pci nonfree 0300 || warn "chwd error — review above."');
+      p('  ok "NVIDIA set up via chwd. A REBOOT is required before gaming."');
+      p("else");
+      p("  sudo pacman -S --needed --noconfirm nvidia-open-dkms nvidia-utils lib32-nvidia-utils \\");
+      p("    nvidia-settings vulkan-icd-loader lib32-vulkan-icd-loader libva-nvidia-driver");
+      p('  ok "NVIDIA packages installed. A REBOOT is required."');
+      p("fi");
+      p("");
+    }
+    if (specials.has("amd")) {
+      p("# --- AMD GPU (Mesa / RADV) ---");
+      p('info "Installing AMD Vulkan + media drivers..."');
+      p("sudo pacman -S --needed --noconfirm mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon \\");
+      p("  libva-mesa-driver vulkan-icd-loader lib32-vulkan-icd-loader");
+      p('ok "AMD drivers installed."');
+      p("");
+    }
+    if (specials.has("intel-gpu")) {
+      p("# --- Intel iGPU drivers ---");
+      p('info "Installing Intel GPU + media drivers..."');
+      p("sudo pacman -S --needed --noconfirm vulkan-intel lib32-vulkan-intel intel-media-driver libva-utils");
+      p('ok "Intel GPU drivers installed."');
+      p("");
+    }
+
+    // ---- CPU microcode -------------------------------------------------------
+    if (specials.has("intel-cpu")) {
+      p("# --- Intel CPU microcode + iGPU media decode ---");
+      p("sudo pacman -S --needed --noconfirm intel-ucode intel-media-driver libva-utils");
+      p('ok "Intel microcode + media drivers installed."');
+      p("");
+    }
+    if (specials.has("amd-cpu")) {
+      p("# --- AMD CPU microcode ---");
+      p("sudo pacman -S --needed --noconfirm amd-ucode");
+      p('ok "AMD microcode installed."');
+      p("");
+    }
+
+    // ---- Official repo packages ---------------------------------------------
+    const uniqueRepo = [...new Set(repoPkgs)];
+    if (uniqueRepo.length) {
+      p("# --- Applications & tools (official repos) ---");
+      p('info "Installing repo packages..."');
+      p("sudo pacman -S --needed --noconfirm \\");
+      p("  " + uniqueRepo.join(" ") + ' || warn "Some repo packages failed."');
+      p("");
+    }
+
+    // ---- AUR packages --------------------------------------------------------
+    const uniqueAur = [...new Set(aurPkgs)];
+    if (uniqueAur.length) {
+      p("# --- Applications (AUR) ---");
+      p('info "Installing AUR packages..."');
+      p('"$AUR" -S --needed --noconfirm \\');
+      p("  " + uniqueAur.join(" ") + ' || warn "Some AUR packages failed."');
+      p("");
+    }
+
+    // ---- ThinkOrSwim ---------------------------------------------------------
+    if (specials.has("thinkorswim")) {
+      p("# --- ThinkOrSwim (needs Java; no official Linux support) ---");
+      p("sudo pacman -S --needed --noconfirm jdk-openjdk");
+      p('"$AUR" -S --needed --noconfirm thinkorswim || warn "ToS install failed."');
+      p('ok "ThinkOrSwim installed. If Java errors appear, try: $AUR -S zulu-21-bin"');
+      p("");
+    }
+
+    // ---- Flatpak -------------------------------------------------------------
+    if (specials.has("flatpak")) {
+      p("# --- Flatpak + Flathub ---");
+      p("sudo pacman -S --needed --noconfirm flatpak");
+      p("flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo");
+      p('ok "Flathub added. Install apps with: flatpak install flathub <app-id>"');
+      p("");
+    }
+
+    // ---- Tweaks --------------------------------------------------------------
+    if (specials.has("sysctl")) {
+      p("# --- Gaming sysctl tuning ---");
+      p('info "Writing /etc/sysctl.d/99-gaming.conf..."');
+      p("sudo tee /etc/sysctl.d/99-gaming.conf >/dev/null <<'EOF'");
+      p("# Higher mmap count — required by some games (certain Source/Proton titles).");
+      p("vm.max_map_count = 2147483642");
+      p("# Be less eager to swap; better on systems with plenty of RAM.");
+      p("vm.swappiness = 10");
+      p("EOF");
+      p("sudo sysctl --system >/dev/null 2>&1");
+      p('ok "Gaming sysctl tuning applied."');
+      p("");
+    }
+    if (specials.has("fstrim")) {
+      p("# --- Weekly SSD TRIM ---");
+      p("sudo systemctl enable --now fstrim.timer >/dev/null 2>&1");
+      p('ok "fstrim.timer enabled."');
+      p("");
+    }
+    if (specials.has("ufw")) {
+      p("# --- Firewall (ufw, default deny incoming) ---");
+      p("sudo pacman -S --needed --noconfirm ufw");
+      p("sudo ufw default deny incoming");
+      p("sudo ufw default allow outgoing");
+      p("sudo systemctl enable --now ufw >/dev/null 2>&1");
+      p('ok "ufw enabled (default-deny incoming)."');
+      p("");
+    }
+
+    // ---- Footer --------------------------------------------------------------
+    p('echo');
+    p('ok "${BOLD}All selected steps are complete.${RESET}"');
+    if (specials.has("nvidia")) p('warn "Reboot now so the NVIDIA driver loads."');
+    if (uniqueAur.includes("protonup-qt") || repoPkgs.includes("steam")) {
+      p('echo "Next: open ProtonUp-Qt -> install latest Proton-GE, then enable it in Steam."');
+    }
+    p('echo "Check games on https://www.protondb.com before trusting them."');
+    p("");
+
+    return L.join("\n");
+  }
+
+  /* ---- buildPlan ----------------------------------------------------------
+   * Produces an ordered list of install steps for the LIVE installer
+   * (server.js runs these and streams progress). Same decisions as
+   * buildScript, but structured so each step can report start/finish and the
+   * UI can show a percentage and per-step status.
+   */
+  function buildPlan(state) {
+    const picks = selectedOptions(state);
+    const specials = new Set();
+    let needsMultilib = false;
+    const repoOpts = [], aurOpts = [];
+
+    for (const o of picks) {
+      if (o.needsMultilib) needsMultilib = true;
+      if (o.type === "repo") repoOpts.push(o);
+      else if (o.type === "aur") aurOpts.push(o);
+      else if (o.special) specials.add(o.special);
+      else if (o.type === "special" && o.special) specials.add(o.special);
+    }
+    if (needsMultilib) specials.add("multilib");
+    const needsAur = aurOpts.length > 0 || specials.has("thinkorswim");
+
+    const steps = [];
+    let reboot = false;
+    const add = (id, label, commands, opts = {}) =>
+      steps.push({ id, label, commands: [].concat(commands), ...opts });
+
+    if (specials.has("update"))
+      add("update", "Update the system", "sudo pacman -Syu --noconfirm");
+
+    if (specials.has("multilib"))
+      add("multilib", "Enable multilib repo",
+        "if ! grep -q '^\\[multilib\\]' /etc/pacman.conf; then sudo sed -i '/^#\\[multilib\\]/,+1 s/^#//' /etc/pacman.conf && sudo pacman -Sy; else echo 'multilib already enabled'; fi");
+
+    if (needsAur)
+      add("aur", "Install paru (AUR helper)",
+        "if command -v paru >/dev/null 2>&1; then echo 'paru already installed'; else sudo pacman -S --needed --noconfirm base-devel git && t=$(mktemp -d) && git clone https://aur.archlinux.org/paru-bin.git \"$t/paru-bin\" && (cd \"$t/paru-bin\" && makepkg -si --noconfirm) && rm -rf \"$t\"; fi");
+
+    if (specials.has("nvidia")) {
+      add("nvidia", "NVIDIA drivers",
+        "if command -v chwd >/dev/null 2>&1; then sudo chwd -a pci nonfree 0300; else sudo pacman -S --needed --noconfirm nvidia-open-dkms nvidia-utils lib32-nvidia-utils nvidia-settings vulkan-icd-loader lib32-vulkan-icd-loader libva-nvidia-driver; fi");
+      reboot = true;
+    }
+    if (specials.has("amd"))
+      add("amd", "AMD GPU drivers",
+        "sudo pacman -S --needed --noconfirm mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon libva-mesa-driver vulkan-icd-loader lib32-vulkan-icd-loader");
+    if (specials.has("intel-gpu"))
+      add("intel-gpu", "Intel GPU drivers",
+        "sudo pacman -S --needed --noconfirm vulkan-intel lib32-vulkan-intel intel-media-driver libva-utils");
+    if (specials.has("intel-cpu"))
+      add("intel-cpu", "Intel microcode",
+        "sudo pacman -S --needed --noconfirm intel-ucode intel-media-driver libva-utils");
+    if (specials.has("amd-cpu"))
+      add("amd-cpu", "AMD microcode", "sudo pacman -S --needed --noconfirm amd-ucode");
+
+    for (const o of repoOpts)
+      add("app-" + o.id, o.name, "sudo pacman -S --needed --noconfirm " + o.packages.join(" "));
+    for (const o of aurOpts)
+      add("app-" + o.id, o.name, "paru -S --needed --noconfirm " + o.packages.join(" "), { aur: true });
+
+    if (specials.has("thinkorswim"))
+      add("thinkorswim", "ThinkOrSwim",
+        ["sudo pacman -S --needed --noconfirm jdk-openjdk",
+         "paru -S --needed --noconfirm thinkorswim"], { aur: true });
+
+    if (specials.has("flatpak"))
+      add("flatpak", "Flatpak + Flathub",
+        ["sudo pacman -S --needed --noconfirm flatpak",
+         "flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo"]);
+
+    if (specials.has("sysctl"))
+      add("sysctl", "Gaming sysctl tuning",
+        "printf '%s\\n' 'vm.max_map_count = 2147483642' 'vm.swappiness = 10' | sudo tee /etc/sysctl.d/99-gaming.conf >/dev/null && sudo sysctl --system");
+    if (specials.has("fstrim"))
+      add("fstrim", "Enable fstrim timer", "sudo systemctl enable --now fstrim.timer");
+    if (specials.has("ufw"))
+      add("ufw", "Firewall (ufw)",
+        ["sudo pacman -S --needed --noconfirm ufw",
+         "sudo ufw default deny incoming",
+         "sudo ufw default allow outgoing",
+         "sudo systemctl enable --now ufw"]);
+
+    return { steps, reboot, needsAur };
+  }
+
+  return { buildScript, buildPlan, selectedOptions };
+})();

@@ -1,91 +1,85 @@
-# CachyOS Setup Wizard
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CachyOS Setup Wizard — pick, tune, and install</title>
+  <meta name="description" content="A friendly, browser-based setup wizard for a fresh CachyOS (Arch-based) machine. Choose your apps, tips and optimizations, then get a personalized install script." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body>
+  <!-- ===== Parallax background (shared across the whole page) ============== -->
+  <div class="bg" aria-hidden="true">
+    <div class="bg-glow"></div>
+    <!-- Layered waves: each drifts at a different depth for parallax. -->
+    <svg class="wave wave-1" data-parallax="0.10" viewBox="0 0 1440 320" preserveAspectRatio="none">
+      <path d="M0,96 C320,200 520,40 720,96 C960,160 1180,40 1440,128 L1440,0 L0,0 Z"
+            fill="none" stroke="#e11d48" stroke-width="6" opacity="0.55" />
+    </svg>
+    <svg class="wave wave-2" data-parallax="0.18" viewBox="0 0 1440 320" preserveAspectRatio="none">
+      <path d="M0,128 C300,260 560,60 760,140 C1000,232 1220,72 1440,170 L1440,0 L0,0 Z"
+            fill="none" stroke="#be4080" stroke-width="34" opacity="0.85" />
+    </svg>
+    <svg class="wave wave-3" data-parallax="0.28" viewBox="0 0 1440 320" preserveAspectRatio="none">
+      <path d="M0,170 C320,300 540,110 780,180 C1020,250 1240,120 1440,210 L1440,0 L0,0 Z"
+            fill="none" stroke="#7c1f4f" stroke-width="10" opacity="0.5" />
+    </svg>
+  </div>
 
-A friendly, **browser-based** setup wizard for a fresh **CachyOS** (Arch-based)
-machine. Instead of running a script blind in the terminal and answering a
-wall of `[y/N]` prompts, you click through a guided, parallax web page — like
-an OS installer, but for your **apps, tips and optimizations** — and walk away
-with a personalized `setup.sh` you review and run.
+  <!-- ===== Hero / landing ================================================= -->
+  <header class="hero">
+    <div class="hero-inner">
+      <span class="kicker">CachyOS · Arch-based</span>
+      <h1 class="hero-title">Set up your machine,<br /><span>your way.</span></h1>
+      <p class="hero-lead">
+        A guided, step-by-step wizard for a fresh CachyOS install — pick your drivers,
+        apps, optimizations and tips, and walk away with a personalized install script.
+        No terminal guesswork.
+      </p>
+      <div class="hero-actions">
+        <button id="btn-begin" class="cta">Begin setup ↓</button>
+        <a class="ghost" href="https://github.com/cixpave/archstartup" target="_blank" rel="noopener">View on GitHub</a>
+      </div>
+      <div class="hero-hint">No installs happen here — the wizard builds a script you review and run.</div>
+    </div>
+    <div class="scroll-cue" aria-hidden="true">▾</div>
+  </header>
 
-> The web page never touches your machine. It only **generates a script** for
-> you to read and run yourself. Same "nothing happens silently" philosophy as
-> the original script, front-loaded into a UI.
+  <!-- ===== Wizard ========================================================= -->
+  <main id="wizard" class="wizard">
+    <div class="wizard-shell">
+      <!-- Progress bar -->
+      <div class="progress">
+        <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+        <div id="progress-dots" class="progress-dots"></div>
+        <div id="step-label" class="step-label"></div>
+      </div>
 
-## Try it
+      <!-- Steps render here -->
+      <section id="stage" class="stage" aria-live="polite"></section>
 
-Open `index.html` in any browser, or host the folder on GitHub Pages:
+      <!-- Nav -->
+      <nav class="nav">
+        <button id="btn-back" class="nav-btn">← Back</button>
+        <button id="btn-next" class="nav-btn primary">Next →</button>
+      </nav>
+    </div>
+  </main>
 
-```bash
-git clone https://github.com/cixpave/archstartup.git
-cd archstartup
-xdg-open index.html        # or just double-click it
-```
+  <footer class="footer">
+    <p>Built for CachyOS · Arch-based. Always check games on
+      <a href="https://www.protondb.com" target="_blank" rel="noopener">ProtonDB</a> and anti-cheat on
+      <a href="https://areweanticheatyet.com" target="_blank" rel="noopener">areweanticheatyet.com</a>.</p>
+    <p class="muted">MIT licensed. This page never modifies your system — it generates a script for you to run.</p>
+  </footer>
 
-To publish it: push to GitHub and enable **Settings → Pages → Deploy from
-branch → root**. The wizard is 100% static (HTML/CSS/JS) — no build step, no
-server, no backend.
-
-## How it works
-
-1. **Welcome** — what the wizard does and why it's safe.
-2. **Graphics drivers** — NVIDIA (via CachyOS `chwd`), AMD (Mesa/RADV), Intel iGPU, or skip.
-3. **CPU microcode** — Intel / AMD.
-4. **Gaming stack** — Steam, GameMode, MangoHud, Gamescope, ProtonUp-Qt, Lutris, Heroic.
-5. **Applications** — Discord, Chrome, Firefox, Spotify, Prism Launcher, Modrinth, VS Code, OBS, ThinkOrSwim.
-6. **Flatpak** — optional Flathub fallback source.
-7. **Optimization & tweaks** — gaming `sysctl`, `fstrim.timer`, multilib, `ufw`.
-8. **Summary** — review your picks, then **Copy** / **Download** your tailored `setup.sh`.
-
-Each step carries inline **tips** and **reference links** (CachyOS wiki, Arch
-Wiki, ProtonDB, Flathub). Sensible "recommended" options are pre-selected, so
-you can click straight through and still get a sane build.
-
-Then, on your machine:
-
-```bash
-chmod +x setup.sh && ./setup.sh
-```
-
-Run it as your **normal user** (not `sudo`) — it calls `sudo` itself where
-needed. **Reboot afterward** if you installed the NVIDIA driver.
-
-## Project layout
-
-```
-index.html              # the parallax wizard page
-assets/
-  css/style.css         # styling + parallax waves
-  js/catalog.js         # all packages / tips / steps as data (edit here to add apps)
-  js/generator.js       # turns selections into a setup.sh
-  js/wizard.js          # step navigation + UI rendering
-  js/parallax.js        # scroll/mouse parallax (respects prefers-reduced-motion)
-setup.sh                # the original full interactive script (still works standalone)
-```
-
-Want to add an app or tweak? It's a one-line data change in
-[`assets/js/catalog.js`](assets/js/catalog.js) — no UI code to touch.
-
-## Notes / gotchas
-
-- **CachyOS / Arch only.** Uses `pacman` + the AUR. Won't work on Bazzite or
-  Nobara (Fedora-based, `rpm`/`dnf`).
-- **NVIDIA:** the default path uses CachyOS's `chwd` detector, the least likely
-  to break your boot. A reboot is required afterward.
-- **AUR apps** (Chrome, Spotify, Modrinth, Heroic…) build from source the first
-  time and need the `paru` helper — the generated script installs it for you.
-- **ThinkOrSwim** is the one finicky app: it needs a JDK. `jdk-openjdk` works in
-  practice; if it refuses to launch, switch to `zulu-21-bin`.
-- **Xbox / Game Pass games don't install natively.** Stream them via
-  `xbox.com/play` in Chrome, or buy the ones you care about on Steam.
-
-## After running
-
-1. Reboot (required for NVIDIA).
-2. Open **ProtonUp-Qt** → install the latest **Proton-GE**.
-3. Steam → Settings → Compatibility → enable Proton for all titles → pick Proton-GE.
-4. Check any game on [ProtonDB](https://www.protondb.com) before trusting it.
-5. For multiplayer titles, check [areweanticheatyet.com](https://areweanticheatyet.com) —
-   a few games (Valorant, Fortnite, Destiny 2) block Linux at the anti-cheat level.
-
-## License
-
-MIT — do whatever you like with it.
+  <script src="assets/js/catalog.js"></script>
+  <script src="assets/js/generator.js"></script>
+  <script src="assets/js/installer.js"></script>
+  <script src="assets/js/wizard.js"></script>
+  <script src="assets/js/parallax.js"></script>
+</body>
+</html>

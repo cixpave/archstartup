@@ -1,0 +1,464 @@
+/*
+ * wizard.js
+ * Drives the step-by-step UI: rendering steps from CATALOG, tracking the
+ * user's selections, and wiring up navigation, progress and the summary.
+ */
+
+(() => {
+  const steps = CATALOG.steps;
+
+  // Selection state. Defaults seed the "recommended" picks so a user can just
+  // click Next all the way through and still get a sensible build.
+  // multi-style steps hold an array of selected ids; "update" behaves the same.
+  const isMultiKind = (step) => step.kind === "multi" || step.kind === "update";
+
+  const state = {};
+  for (const step of steps) {
+    if (step.kind === "single" && step.options) {
+      const rec = step.options.find((o) => o.recommended) || step.options[0];
+      state[step.key] = rec.id;
+    } else if (isMultiKind(step) && step.options) {
+      state[step.key] = step.options.filter((o) => o.recommended).map((o) => o.id);
+    }
+  }
+
+  let current = 0;
+
+  // ---- DOM refs -------------------------------------------------------------
+  const $stage = document.getElementById("stage");
+  const $progressDots = document.getElementById("progress-dots");
+  const $progressFill = document.getElementById("progress-fill");
+  const $back = document.getElementById("btn-back");
+  const $next = document.getElementById("btn-next");
+  const $stepLabel = document.getElementById("step-label");
+
+  // ---- Helpers --------------------------------------------------------------
+  const el = (tag, cls, html) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (html != null) n.innerHTML = html;
+    return n;
+  };
+
+  function buildProgress() {
+    $progressDots.innerHTML = "";
+    steps.forEach((s, i) => {
+      const dot = el("button", "dot");
+      dot.title = s.title;
+      dot.setAttribute("aria-label", s.title);
+      dot.addEventListener("click", () => goTo(i));
+      $progressDots.appendChild(dot);
+    });
+  }
+
+  function renderTips(step) {
+    const tips = CATALOG.tips[step.id];
+    if (!tips || !tips.length) return null;
+    const box = el("aside", "tips");
+    box.appendChild(el("div", "tips-head", "💡 Tips"));
+    const ul = el("ul");
+    tips.forEach((t) => ul.appendChild(el("li", null, t)));
+    box.appendChild(ul);
+    if (step.reference) {
+      const link = el("a", "ref-link", `🔗 ${step.reference.label}`);
+      link.href = step.reference.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      box.appendChild(link);
+    }
+    return box;
+  }
+
+  // ---- Step renderers -------------------------------------------------------
+  function renderIntro(step) {
+    const wrap = el("div", "card intro-card");
+    wrap.appendChild(el("h1", "headline", `Hey there! 👋`));
+    wrap.appendChild(el("p", "subhead", step.subtitle));
+    const facts = el("div", "fact-grid");
+    [
+      ["🧭", "Step by step", "Like an OS installer — but for your apps, tips & tuning."],
+      ["🎛️", "You choose", "Tick only what you want. Sensible defaults are pre-selected."],
+      ["📜", "Safe by design", "We build a script you read and run. Nothing happens in the browser."],
+    ].forEach(([icon, h, d]) => {
+      const f = el("div", "fact");
+      f.appendChild(el("div", "fact-ico", icon));
+      f.appendChild(el("div", "fact-h", h));
+      f.appendChild(el("div", "fact-d", d));
+      facts.appendChild(f);
+    });
+    wrap.appendChild(facts);
+    return wrap;
+  }
+
+  function renderChoices(step) {
+    const wrap = el("div", "card");
+    wrap.appendChild(el("h2", "step-title", step.title));
+    wrap.appendChild(el("p", "step-sub", step.subtitle));
+    if (step.help) wrap.appendChild(el("div", "step-help", step.help));
+
+    const list = el("div", "options");
+    step.options.forEach((opt) => {
+      const isMulti = isMultiKind(step);
+      const checked = isMulti
+        ? state[step.key].includes(opt.id)
+        : state[step.key] === opt.id;
+
+      const row = el("label", "option" + (checked ? " selected" : ""));
+      const input = el("input");
+      input.type = isMulti ? "checkbox" : "radio";
+      input.name = step.key;
+      input.value = opt.id;
+      input.checked = checked;
+
+      input.addEventListener("change", () => {
+        if (isMulti) {
+          const set = new Set(state[step.key]);
+          input.checked ? set.add(opt.id) : set.delete(opt.id);
+          state[step.key] = [...set];
+        } else {
+          state[step.key] = opt.id;
+        }
+        // re-render to update selected styling
+        renderStep();
+      });
+
+      const mark = el("span", "mark");
+      const body = el("span", "option-body");
+      const titleRow = el("span", "option-title");
+      titleRow.appendChild(el("span", "option-name", opt.name));
+      if (opt.recommended) titleRow.appendChild(el("span", "badge", "Recommended"));
+      body.appendChild(titleRow);
+      body.appendChild(el("span", "option-desc", opt.desc));
+
+      row.appendChild(input);
+      row.appendChild(mark);
+      row.appendChild(body);
+      list.appendChild(row);
+    });
+    wrap.appendChild(list);
+    return wrap;
+  }
+
+  // Adds the "Check for updates" panel to the update step (server mode only).
+  function injectUpdateCheck(card) {
+    const panel = el("div", "update-check");
+    if (Installer.available()) {
+      const h = Installer.health();
+      panel.appendChild(
+        el("div", "uc-status",
+          `<span class="uc-dot ok"></span> Local installer connected` +
+          (h.pacman ? "" : " · <em>no pacman here, so installs run as a dry-run</em>"))
+      );
+      const btn = el("button", "tool-btn", "🔄 Check for updates");
+      const result = el("div", "uc-result muted", "");
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "Checking…";
+        const u = await Installer.checkUpdates();
+        btn.disabled = false;
+        btn.textContent = "🔄 Check for updates";
+        if (!u.available) result.textContent = u.reason ? `Couldn't check (${u.reason}).` : "Update check unavailable.";
+        else if (u.count === 0) result.innerHTML = "✅ Your system is fully up to date.";
+        else result.innerHTML =
+          `📦 <strong>${u.count}</strong> update(s) available` +
+          (u.packages && u.packages.length
+            ? `: <span class="uc-pkgs">${u.packages.slice(0, 12).join(", ")}${u.count > 12 ? "…" : ""}</span>`
+            : "");
+      });
+      panel.append(btn, result);
+    } else {
+      panel.appendChild(
+        el("div", "uc-status",
+          `<span class="uc-dot off"></span> Opened as a static page — live update-check needs the local server ` +
+          `(<code>node server.js</code>). The toggle below still goes into your script.`)
+      );
+    }
+    const list = card.querySelector(".options");
+    card.insertBefore(panel, list);
+  }
+
+  function renderSummary(step) {
+    const wrap = el("div", "card summary-card");
+    wrap.appendChild(el("h2", "step-title", step.title));
+    wrap.appendChild(el("p", "step-sub", step.subtitle));
+
+    const picks = Generator.selectedOptions(state);
+    const chips = el("div", "chips");
+    if (!picks.length) {
+      chips.appendChild(el("span", "muted", "Nothing selected yet — go back and pick a few things."));
+    }
+    picks.forEach((o) => chips.appendChild(el("span", "chip", o.name)));
+    wrap.appendChild(chips);
+
+    // Live install (only when served by the local server).
+    if (Installer.available() && picks.length) {
+      const h = Installer.health();
+      const box = el("div", "install-box");
+      box.appendChild(el("div", "install-title", "⚡ Install now on this machine"));
+      box.appendChild(el("div", "install-sub",
+        h.pacman
+          ? "The local installer runs these steps for you and streams progress live below."
+          : "No pacman detected here — this runs as a safe simulated dry-run."));
+      const controls = el("div", "install-controls");
+      const runBtn = el("button", "tool-btn primary big", "▶ Start install");
+      const dryLabel = el("label", "dry-toggle");
+      const dryCb = el("input");
+      dryCb.type = "checkbox";
+      dryCb.checked = !h.pacman; // default to real install on Arch, dry-run elsewhere
+      dryLabel.append(dryCb, document.createTextNode(" Simulate (dry run)"));
+      controls.append(runBtn, dryLabel);
+      box.appendChild(controls);
+      runBtn.addEventListener("click", () => startInstall({ dryRun: dryCb.checked }));
+      wrap.appendChild(box);
+      wrap.appendChild(el("div", "or-divider", "— or grab the script —"));
+    }
+
+    const script = Generator.buildScript(state);
+
+    const toolbar = el("div", "toolbar");
+    const copyBtn = el("button", "tool-btn primary", "📋 Copy script");
+    const dlBtn = el("button", "tool-btn", "⬇️ Download setup.sh");
+    const cmdBtn = el("button", "tool-btn", "⚡ Copy one-line install");
+    toolbar.append(copyBtn, dlBtn, cmdBtn);
+    wrap.appendChild(toolbar);
+
+    const pre = el("pre", "script");
+    pre.appendChild(el("code", null, escapeHtml(script)));
+    wrap.appendChild(pre);
+
+    const run = el("div", "run-note");
+    run.innerHTML =
+      "Then run it:&nbsp; <code>chmod +x setup.sh &amp;&amp; ./setup.sh</code> &nbsp;— as your normal user.";
+    wrap.appendChild(run);
+
+    copyBtn.addEventListener("click", () => {
+      copy(script);
+      flash(copyBtn, "✓ Copied!");
+    });
+    dlBtn.addEventListener("click", () => download("setup.sh", script));
+    cmdBtn.addEventListener("click", () => {
+      // A pragmatic one-liner: write the script via a heredoc then run it.
+      const oneLiner =
+        "curl -fsSL https://raw.githubusercontent.com/cixpave/archstartup/main/setup.sh -o setup.sh && chmod +x setup.sh && ./setup.sh";
+      copy(oneLiner);
+      flash(cmdBtn, "✓ Copied!");
+    });
+
+    return wrap;
+  }
+
+  // ---- Live install ---------------------------------------------------------
+  async function startInstall({ dryRun }) {
+    const plan = Generator.buildPlan(state);
+    if (!plan.steps.length) return;
+    const ui = renderProgress(plan);
+    $back.disabled = true;
+    $next.disabled = true;
+    try {
+      await Installer.run({ steps: plan.steps, reboot: plan.reboot, dryRun }, ui.onEvent);
+    } catch (e) {
+      ui.fail("Lost connection to the local installer: " + e.message);
+    }
+  }
+
+  function renderProgress(plan) {
+    $stage.innerHTML = "";
+    const card = el("div", "card progress-card");
+    card.appendChild(el("h2", "step-title", "Setting up your system"));
+    const sub = el("p", "step-sub", "Sit tight — running your selected steps.");
+    card.appendChild(sub);
+
+    const pctWrap = el("div", "pct-wrap");
+    const pctNum = el("div", "pct-num", "0%");
+    const bar = el("div", "pbar");
+    const fill = el("div", "pbar-fill");
+    bar.appendChild(fill);
+    pctWrap.append(pctNum, bar);
+    card.appendChild(pctWrap);
+
+    const list = el("div", "plan-list");
+    const rows = plan.steps.map((s) => {
+      const row = el("div", "plan-row");
+      const dot = el("span", "plan-dot");
+      row.append(dot, el("span", "plan-label", s.label));
+      list.appendChild(row);
+      return { row, dot };
+    });
+    card.appendChild(list);
+
+    const log = el("pre", "install-log");
+    card.appendChild(log);
+    const footer = el("div", "progress-footer");
+    card.appendChild(footer);
+
+    $stage.appendChild(card);
+    requestAnimationFrame(() => card.classList.add("in"));
+
+    const appendLog = (line) => {
+      const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+      log.textContent += line + "\n";
+      if (log.textContent.length > 24000) log.textContent = log.textContent.slice(-18000);
+      if (atBottom) log.scrollTop = log.scrollHeight;
+    };
+    const setPct = (p) => { pctNum.textContent = p + "%"; fill.style.width = p + "%"; };
+
+    const addReturn = () => {
+      $back.disabled = false;
+      $next.disabled = false;
+      const back = el("button", "tool-btn", "← Back to summary");
+      back.addEventListener("click", () => renderStep());
+      footer.appendChild(back);
+    };
+
+    function finish(ev) {
+      setPct(100);
+      const ok = !ev.failed;
+      sub.textContent = ev.dryRun
+        ? "Dry-run complete — nothing on your system was changed."
+        : ok ? "All done! 🎉" : "Finished, but some steps failed — see the log above.";
+      const msg = el("div", "finish-msg " + (ok ? "good" : "warn"));
+      msg.innerHTML = ev.dryRun
+        ? "✅ Simulation finished. Run under the local server on CachyOS to install for real."
+        : ok
+        ? `✅ Installed ${ev.completed}/${ev.total} steps successfully.`
+        : `⚠️ ${ev.completed}/${ev.total} steps succeeded. Re-run to retry the failed ones.`;
+      footer.appendChild(msg);
+      if (ev.reboot && !ev.dryRun)
+        footer.appendChild(el("div", "finish-msg warn", "🔁 Reboot now so the NVIDIA driver loads."));
+      addReturn();
+    }
+    function fail(message) {
+      const msg = el("div", "finish-msg warn", "✗ " + message);
+      footer.appendChild(msg);
+      addReturn();
+    }
+
+    function onEvent(ev) {
+      switch (ev.type) {
+        case "start":
+          sub.textContent = ev.dryRun
+            ? "Dry-run: simulating the install (no changes made)."
+            : "Running your selected steps — sudo is used where needed.";
+          break;
+        case "step": {
+          const r = rows[ev.index];
+          if (!r) break;
+          if (ev.status === "running") { r.row.classList.add("running"); r.dot.classList.add("running"); }
+          else {
+            r.row.classList.remove("running");
+            r.dot.classList.remove("running");
+            r.dot.classList.add(ev.status === "done" ? "done" : "error");
+          }
+          break;
+        }
+        case "log": appendLog(ev.line); break;
+        case "progress": setPct(ev.percent); break;
+        case "done": finish(ev); break;
+        case "error": fail(ev.message || "Install failed."); break;
+      }
+    }
+
+    return { onEvent, fail };
+  }
+
+  // ---- Master render --------------------------------------------------------
+  function renderStep() {
+    const step = steps[current];
+    $stage.innerHTML = "";
+
+    const layout = el("div", "step-layout");
+    let main;
+    if (step.kind === "intro") main = renderIntro(step);
+    else if (step.kind === "summary") main = renderSummary(step);
+    else main = renderChoices(step);
+    if (step.kind === "update") injectUpdateCheck(main);
+    layout.appendChild(main);
+
+    const tips = renderTips(step);
+    if (tips) layout.appendChild(tips);
+
+    $stage.appendChild(layout);
+
+    // trigger entrance animation
+    requestAnimationFrame(() => main.classList.add("in"));
+
+    // progress
+    [...$progressDots.children].forEach((d, i) => {
+      d.classList.toggle("active", i === current);
+      d.classList.toggle("done", i < current);
+    });
+    $progressFill.style.width = `${(current / (steps.length - 1)) * 100}%`;
+    $stepLabel.textContent = `Step ${current + 1} of ${steps.length} · ${step.title}`;
+
+    $back.disabled = current === 0;
+    $next.textContent = current === steps.length - 1 ? "Finish ✓" : "Next →";
+
+    // Keep the user anchored on the wizard (never bounce back up to the hero).
+    // Only scroll if the wizard's top has drifted off-screen.
+    const wiz = document.getElementById("wizard");
+    if (wiz.getBoundingClientRect().top < -4) {
+      wiz.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  function goTo(i) {
+    current = Math.max(0, Math.min(steps.length - 1, i));
+    renderStep();
+  }
+
+  // ---- Utilities ------------------------------------------------------------
+  function escapeHtml(s) {
+    return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  }
+  function copy(text) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    } else fallbackCopy(text);
+  }
+  function fallbackCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+  function download(name, text) {
+    const blob = new Blob([text], { type: "text/x-shellscript" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+  function flash(btn, msg) {
+    const old = btn.textContent;
+    btn.textContent = msg;
+    btn.classList.add("flash");
+    setTimeout(() => { btn.textContent = old; btn.classList.remove("flash"); }, 1400);
+  }
+
+  // ---- Wire up --------------------------------------------------------------
+  $back.addEventListener("click", () => goTo(current - 1));
+  $next.addEventListener("click", () => goTo(current + 1));
+  document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    if (e.key === "ArrowRight") goTo(current + 1);
+    if (e.key === "ArrowLeft") goTo(current - 1);
+  });
+
+  // "Begin" button on the landing hero scrolls to the wizard.
+  const beginBtn = document.getElementById("btn-begin");
+  if (beginBtn) {
+    beginBtn.addEventListener("click", () => {
+      document.getElementById("wizard").scrollIntoView({ behavior: "smooth" });
+    });
+  }
+
+  buildProgress();
+  renderStep();
+
+  // When the local-server probe resolves, re-render so the update-check and
+  // live-install controls appear (or stay hidden in static mode).
+  Installer.onReady(() => renderStep());
+})();

@@ -379,6 +379,70 @@ a:hover { text-decoration: underline; }
 .nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .nav-btn.primary { background: linear-gradient(100deg, var(--pink-bright), var(--red)); border: none; }
 
+/* Update-check panel (update step) */
+.update-check {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 20px;
+}
+.uc-status { font-size: 0.9rem; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.uc-status code { background: rgba(0,0,0,0.4); padding: 1px 6px; border-radius: 5px; font-size: 0.82em; }
+.uc-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.uc-dot.ok { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,0.18); }
+.uc-dot.off { background: #6b7280; }
+.update-check .tool-btn { margin-top: 12px; }
+.uc-result { margin-top: 12px; font-size: 0.9rem; }
+.uc-result strong { color: var(--pink-bright); }
+.uc-pkgs { color: var(--muted); font-size: 0.85em; }
+
+/* Live-install box (summary) */
+.install-box {
+  background: linear-gradient(180deg, rgba(232,90,155,0.12), rgba(232,90,155,0.04));
+  border: 1px solid rgba(232,90,155,0.35);
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 18px;
+}
+.install-title { font-weight: 700; font-size: 1.1rem; margin-bottom: 4px; }
+.install-sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 14px; }
+.install-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.tool-btn.big { padding: 13px 26px; font-size: 1rem; }
+.dry-toggle { display: flex; align-items: center; gap: 7px; font-size: 0.88rem; color: var(--muted); cursor: pointer; }
+.dry-toggle input { width: 16px; height: 16px; accent-color: var(--pink-bright); }
+.or-divider { text-align: center; color: var(--muted); font-size: 0.8rem; letter-spacing: 0.05em; margin: 4px 0 16px; }
+
+/* Progress page */
+.progress-card .pct-wrap { margin: 8px 0 22px; }
+.pct-num { font-size: 2.6rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 10px; }
+.pbar { height: 10px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; }
+.pbar-fill {
+  height: 100%; width: 0;
+  background: linear-gradient(90deg, var(--pink-bright), var(--red));
+  border-radius: 999px;
+  transition: width 0.35s cubic-bezier(0.4,0,0.2,1);
+}
+.plan-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
+.plan-row { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border-radius: 8px; font-size: 0.92rem; transition: background 0.2s; }
+.plan-row.running { background: rgba(232,90,155,0.10); }
+.plan-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.25); flex: 0 0 auto; position: relative; }
+.plan-dot.running { border-color: var(--pink-bright); border-top-color: transparent; animation: spin 0.7s linear infinite; }
+.plan-dot.done { background: #22c55e; border-color: #22c55e; }
+.plan-dot.done::after { content: "✓"; position: absolute; inset: -3px 0 0 1px; font-size: 10px; color: #07210f; font-weight: 800; }
+.plan-dot.error { background: var(--red); border-color: var(--red); }
+.plan-dot.error::after { content: "✗"; position: absolute; inset: -3px 0 0 2px; font-size: 9px; color: #2a0710; font-weight: 800; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.install-log {
+  background: #08080a; border: 1px solid var(--card-border); border-radius: 12px;
+  padding: 16px; height: 240px; overflow: auto; font-size: 0.78rem; line-height: 1.5;
+  color: #b8c0cc; white-space: pre-wrap; word-break: break-word;
+}
+.progress-footer { margin-top: 18px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.finish-msg { font-weight: 600; font-size: 0.95rem; }
+.finish-msg.good { color: #4ade80; }
+.finish-msg.warn { color: #fbbf24; }
+
 /* Footer */
 .footer {
   text-align: center;
